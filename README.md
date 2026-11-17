@@ -22,6 +22,16 @@ Each topic has its own page with the symptoms, the cause and the fix.
 | [VPN](vpn.md) | ETH VPN (Cisco AnyConnect protocol) in KDE with openconnect |
 | [Webcam](webcam/README.md) | Integrated IPU7 webcam shows black or crashes PipeWire; includes install scripts |
 
+## Official IAC documentation
+
+The IAC IT wiki covers the officially supported setup and is the first place
+to look:
+
+- [Linux on IAC laptops](https://wiki.iac.ethz.ch/bin/viewauth/IT/LinuxIACLaptop)
+  (login required)
+- [Linux on Dell laptops](https://wiki.iac.ethz.ch/IT/LinuxLaptopDell)
+- [Printing under Linux](https://wiki.iac.ethz.ch/IT/LinuxPrinting)
+
 ## Disclaimer
 
 These are personal notes, not official ETH documentation. Usernames, printer
