@@ -1,0 +1,172 @@
+# Integrated webcam on the Dell Pro 14 Premium under Ubuntu 26.04
+
+Out of the box, the integrated webcam of the Dell Pro 14 Premium (PA14250)
+shows a black picture on Ubuntu 26.04, and opening it can crash PipeWire
+(and with it, sound). This repository documents why, and contains a
+workaround that provides the camera to all applications as a virtual webcam
+called **Integrated Camera**.
+
+Status as of 2026-11-13: working in GNOME Snapshot at 30 fps. Behaviour
+across a reboot with the final configuration has not been verified yet.
+
+## Hardware and software
+
+| Component | Value |
+| --- | --- |
+| Laptop | Dell Pro 14 Premium PA14250, Intel Core Ultra 7 268V (Lunar Lake) |
+| Camera | MIPI, Intel IPU7 + OmniVision OV08X40 (ACPI `OVTI08F4`), 2 lanes |
+| Sensor access | Intel CVS chip (ACPI `INTC10DE`) behind a Synaptics USBIO bridge |
+| OS | Ubuntu 26.04.1 LTS, kernel 7.0.0-43-generic, KDE Plasma, Secure Boot on |
+| libcamera | 0.7.0-1ubuntu2 |
+| PipeWire / WirePlumber | 1.6.2 / 0.5.13 |
+| v4l2-relayd | 0.2.0-0ubuntu1 |
+
+## Quick start
+
+```sh
+./install.sh     # run as your normal user; asks for sudo
+sudo reboot      # needed if linux-modules-vision-generic was newly installed
+./check.sh       # health check: service, PipeWire node, frame rate, brightness
+```
+
+Then choose **Integrated Camera** in your applications. To remove everything:
+`./uninstall.sh`.
+
+`install.sh` has only been exercised in dry-run mode (`DESTDIR=... DRY_RUN=1`),
+where it reproduces the files of the working system. The files in `config/`
+are copies of that working system.
+
+## How it works
+
+```text
+OV08X40 sensor -> IPU7 -> libcamera (software ISP, 3848x2176)
+   -> vapostproc (GPU scaling to 1280x720) -> v4l2-relayd
+   -> v4l2loopback device "Integrated Camera" -> applications
+```
+
+`v4l2-relayd` only runs the real camera while an application has the virtual
+device open. While the camera is on, the relay uses roughly 40 % of one CPU
+core.
+
+## The problems, in the order they appeared
+
+### 1. The sensor is not enumerated
+
+The sensor's ACPI node depends on the Intel CVS chip (`INTC10DE`). Without a
+driver for that chip, the kernel never creates the `ov08x40` I2C device, so
+the 32 `Intel IPU7 ISYS Capture` nodes exist but nothing feeds them.
+
+**Fix:** `linux-modules-vision-generic` (Ubuntu's signed build of the Intel
+CVS driver).
+
+### 2. The raw capture nodes only give black
+
+The IPU7 nodes deliver raw Bayer data and need libcamera to drive them.
+Applications that open `/dev/video0` directly get a black picture, and an
+application holding such a node open blocks libcamera ("device busy").
+Firefox did this.
+
+**Fix:** applications get a normal webcam device instead (the virtual
+camera), and the raw nodes are hidden in PipeWire
+(`config/wireplumber/51-hide-ipu7-raw-nodes.conf`).
+
+### 3. The binned sensor mode is broken and crashes libcamera
+
+The sensor offers 3856x2176 and a binned 1928x1088 mode. In the binned mode
+only the first line of each frame contains data; the rest of the buffer is
+`0xFFFF`. libcamera's software ISP indexes a 64-entry histogram with those
+out-of-range values and aborts:
+
+```text
+std::array<unsigned int, 64>::operator[]: Assertion '__n < this->size()' failed.
+```
+
+libcamera picks the binned mode for every output size up to 1928x1088, which
+is what all applications ask for. Because libcamera runs inside PipeWire,
+the abort takes PipeWire down. It happens in both software-ISP modes
+(`LIBCAMERA_SOFTISP_MODE=cpu` and `gpu`).
+
+**Fix:** never let libcamera choose the output size. The relay requests
+3848x2176 and scales afterwards, and libcamera is disabled in PipeWire
+(`config/wireplumber/50-disable-libcamera.conf`).
+
+The underlying bug is presumably in the kernel `ov08x40` driver's 2-lane
+1928x1088 mode. No upstream report was found.
+
+### 4. Pitfalls in the relay setup
+
+Each of these produced a black or frozen picture on the way:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Relay logs `no element "video"` | A pipeline description must not end in a bare caps string | End with `capsfilter caps=...` |
+| 13 s of black, then 1 fps | `videorate` fills the gap since service start with duplicates | `videorate skip-to-first=true` |
+| Real picture, but 1 fps | `v4l2sink` drops frames as late | `sync=false` (`nosync.conf`, inferred cause, confirmed by result) |
+| Relay logs `gst_element_set_state: assertion 'GST_IS_ELEMENT (element)' failed` after boot | Service started 0.8 s before the GPU driver, so `vapostproc` did not exist | `wait-gpu.conf` waits for `/dev/dri/renderD*` |
+| "No camera found" after restarting the relay | PipeWire drops the loopback device while no producer is attached | Restart PipeWire after restarting the relay |
+
+## Files
+
+| Repository file | Installed as |
+| --- | --- |
+| `config/v4l2-relayd.d/integrated-camera.conf` | `/etc/v4l2-relayd.d/` |
+| `config/systemd/libcamera.conf` | `/etc/systemd/system/v4l2-relayd@.service.d/` |
+| `config/systemd/wait-gpu.conf` | `/etc/systemd/system/v4l2-relayd@.service.d/` |
+| generated by `install.sh` | `/etc/systemd/system/v4l2-relayd@.service.d/nosync.conf` |
+| `config/modprobe.d/v4l2-relayd.conf` | `/etc/modprobe.d/` |
+| `config/wireplumber/*.conf` | `~/.config/wireplumber/wireplumber.conf.d/` |
+
+`libcamera.conf` extends the packaged service sandbox with the DMA buffer
+devices that libcamera's software ISP needs. `nosync.conf` is the packaged
+`ExecStart` line with `sync=false` added to `v4l2sink`; it is generated from
+the installed unit so that it follows the package.
+
+## Troubleshooting
+
+Run `./check.sh` first. Then:
+
+```sh
+# Relay log (pipeline errors show up when an application opens the camera)
+journalctl -b -u 'v4l2-relayd@*'
+
+# After restarting the relay, PipeWire has to rediscover the device
+sudo systemctl restart v4l2-relayd@integrated-camera
+systemctl --user restart wireplumber pipewire pipewire-pulse
+
+# Which process holds a camera device open
+for p in /proc/[0-9]*; do
+  ls -l $p/fd 2>/dev/null | grep -qE '/dev/(video[0-9]+|media0)$' &&
+    echo "$(basename $p) $(tr '\0' ' ' < $p/cmdline | cut -c1-60)"
+done
+
+# Did the sensor come up
+journalctl -k -b | grep -iE 'ov08|cvs|int3472'
+```
+
+For more detail from the relay, add `EXTRA_OPTS=-d` to
+`/etc/v4l2-relayd.d/integrated-camera.conf` and a drop-in with
+`Environment=GST_DEBUG=3`, then restart the service.
+
+## Known limitations
+
+- Colours and exposure are uncalibrated: libcamera has no tuning file for the
+  OV08X40 and uses its generic one. In dim rooms the sensor runs at maximum
+  exposure and gain, which smears motion.
+- Applications that list V4L2 devices directly (Firefox by default, some
+  Snap or Flatpak apps) still show the raw `ipu7` entries. Choose
+  **Integrated Camera**; an `ipu7` entry gives black and can block the camera.
+  A udev rule removing the `uaccess` tag did not remove the ACL and is not
+  part of this repository.
+- The first frame or two after opening the camera are black while the real
+  camera starts.
+- The output is fixed at 1280x720, 30 fps, YUY2.
+- The kernel logs `int3472-discrete INT3472:00: GPIO type 0x02 unknown; the
+  sensor may not work`. The sensor works regardless.
+
+## When this can be removed
+
+Once the binned sensor mode is fixed in the kernel, or libcamera stops
+selecting it, PipeWire's own libcamera support should work directly. Test
+with `cam -c1 -s width=1280,height=720 --capture=30` (package
+`libcamera-tools`) while the relay is stopped: if that no longer aborts, run
+`./uninstall.sh`.
