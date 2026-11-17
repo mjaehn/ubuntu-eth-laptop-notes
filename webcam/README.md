@@ -6,8 +6,8 @@ shows a black picture on Ubuntu 26.04, and opening it can crash PipeWire
 workaround that provides the camera to all applications as a virtual webcam
 called **Integrated Camera**.
 
-Status as of 2026-11-13: working in GNOME Snapshot at 30 fps. Behaviour
-across a reboot with the final configuration has not been verified yet.
+Status as of 2026-11-17: working in GNOME Snapshot at 30 fps, and the
+camera comes up automatically after a reboot.
 
 ## Hardware and software
 
