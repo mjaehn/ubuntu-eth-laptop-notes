@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Drive the Dell Collaboration Touchpad icons for Zoom meetings on Linux.
+"""Drive the Dell Collaboration Touchpad icons for Zoom and Teams meetings on Linux.
 
-While a Zoom meeting runs, the four icons are lit: camera and mic white when
-on, red when off/muted. Taps send Zoom's global shortcuts (Alt+V, Alt+S, Alt+H,
-Alt+A). Zoom's mute state is read from its mute button over AT-SPI; without
-it, the mic icon and tap fall back to the system microphone mute.
+While a meeting runs, the four icons are lit: camera and mic white when on, red
+when off/muted. Zoom: taps send Zoom's global shortcuts (Alt+V, Alt+S, Alt+H,
+Alt+A), and the mute state is read from its mute button over AT-SPI. Teams in
+Firefox: state and taps go through the meeting toolbar buttons over AT-SPI.
+Without a readable mute button, the mic icon and tap use the system mute.
 """
 import glob, os, select, signal, subprocess, sys, time
 
@@ -18,8 +19,11 @@ RID = 0x16
 LEVEL = int(os.environ.get("COLLAB_LEVEL", "3"))  # icon brightness 1..4
 POLL = 1.0                                         # state check interval in s
 REFRESH = 10.0                                     # resend LEDs at least this often (touchpad may reset on resume)
-KEYS = {0x02: e.KEY_V, 0x04: e.KEY_S, 0x08: e.KEY_H}  # camera, share, chat -> Alt+key; mic -> Alt+A
-MIC = 0x10
+CAMERA, SHARE, CHAT, MIC = 0x02, 0x04, 0x08, 0x10  # button bits in the input report
+ZOOM_KEYS = {CAMERA: e.KEY_V, SHARE: e.KEY_S, CHAT: e.KEY_H, MIC: e.KEY_A}  # Alt+key
+TEAMS_TAPS = {CAMERA: ("Turn camera off", "Turn camera on"), SHARE: ("Share",),
+              CHAT: ("Chat",), MIC: ("Mute mic", "Unmute mic")}
+TEAMS_BUTTONS = {name for names in TEAMS_TAPS.values() for name in names}
 
 # Usage page 0xFF80, usage 0x80, collection, report ID 0x16: Dell's collaboration icon interface
 SIGNATURE = bytes.fromhex("0680ff0980a1018516")
@@ -46,6 +50,19 @@ def led_report(camera_on, mic_on, level=LEVEL):
 OFF = bytes([RID, 0, 0, 0, 0, 0])
 
 
+def active_app():
+    """Return "zoom" or "teams" while that app records from the microphone, else None."""
+    out = subprocess.run(["pactl", "list", "source-outputs"], capture_output=True, text=True).stdout
+    streams = out.split("Source Output #")[1:]
+    # Zoom opens this stream only while connected to meeting audio
+    if any('application.name = "ZOOM VoiceEngine"' in s for s in streams):
+        return "zoom"
+    # Firefox names the stream after the tab title, which ends in "Microsoft Teams"
+    if any('application.name = "Firefox"' in s and "Microsoft Teams" in s for s in streams):
+        return "teams"
+    return None
+
+
 def procs(name):
     for comm in glob.glob("/proc/[0-9]*/comm"):
         try:
@@ -55,13 +72,7 @@ def procs(name):
             pass
 
 
-def meeting_active():
-    # Zoom records from the microphone only while it is connected to meeting audio
-    out = subprocess.run(["pactl", "list", "source-outputs"], capture_output=True, text=True).stdout
-    return 'application.name = "ZOOM VoiceEngine"' in out
-
-
-def camera_on():
+def zoom_camera_on():
     for p in procs("zoom"):
         for fd in glob.glob(p + "/fd/*"):
             try:
@@ -72,22 +83,54 @@ def camera_on():
     return False
 
 
+def children(o):
+    return [c for k in range(o.get_child_count()) if (c := o.get_child_at_index(k)) is not None]
+
+
+def atspi_apps(name):
+    for app in children(Atspi.get_desktop(0)):
+        if app.get_name() == name:
+            app.clear_cache()  # names change while the app runs; do not trust cached ones
+            yield app
+
+
 def zoom_mute_button():
     """Return the text of Zoom's meeting toolbar mute button ("Mute" or "Unmute"), or None."""
-    desktop = Atspi.get_desktop(0)
-    for i in range(desktop.get_child_count()):
-        app = desktop.get_child_at_index(i)
-        if app is None or app.get_name() != "zoom":
-            continue
-        app.clear_cache()  # names change while Zoom runs; do not trust cached ones
-        stack = [app.get_child_at_index(j) for j in range(app.get_child_count())]
-        stack = [f for f in stack if f is not None and f.get_name() == "Meeting"]
+    for app in atspi_apps("zoom"):
+        stack = [f for f in children(app) if f.get_name() == "Meeting"]
         while stack:
             o = stack.pop()
             if o.get_name() in ("Mute", "Unmute") and o.get_role_name() in ("button", "push button"):
                 return o.get_name()
-            stack.extend(c for k in range(o.get_child_count()) if (c := o.get_child_at_index(k)) is not None)
+            stack.extend(children(o))
     return None
+
+
+def teams_buttons():
+    """Return Teams' meeting toolbar buttons in Firefox, keyed by their accessible name."""
+    docs, stack = [], [f for app in atspi_apps("Firefox") for f in children(app)]
+    while stack:  # each tab, also in the background, is one "document web"
+        o = stack.pop()
+        if o.get_role_name() == "document web":
+            if "Microsoft Teams" in (o.get_name() or ""):
+                docs.append(o)
+        else:
+            stack.extend(children(o))
+    found = {}
+    while docs:
+        o = docs.pop()
+        # Plain buttons only: the "Chat" toggle button in the app sidebar opens the Chat app
+        if o.get_name() in TEAMS_BUTTONS and o.get_role_name() == "button":
+            found[o.get_name()] = o
+        docs.extend(children(o))
+    return found
+
+
+def safe(f, default=None):
+    try:
+        return f()
+    except Exception:  # accessibility bus unavailable or app window closed
+        return default
 
 
 def system_mic_on():
@@ -95,12 +138,18 @@ def system_mic_on():
     return "MUTED" not in out
 
 
-def mic_on():
-    try:
-        button = zoom_mute_button()
-    except Exception:  # accessibility bus unavailable
-        button = None
-    return system_mic_on() if button is None else button == "Mute"
+def toggle_system_mic():
+    subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+
+
+def state(app):
+    """Return (camera_on, mic_on) for the active app."""
+    if app == "zoom":
+        button = safe(zoom_mute_button)
+        return zoom_camera_on(), system_mic_on() if button is None else button == "Mute"
+    buttons = safe(teams_buttons, {})
+    mic = "Mute mic" in buttons if {"Mute mic", "Unmute mic"} & buttons.keys() else system_mic_on()
+    return "Turn camera off" in buttons, mic
 
 
 def press_alt(kbd, key):
@@ -109,20 +158,40 @@ def press_alt(kbd, key):
         kbd.syn()
 
 
+def tap(app, bits, kbd):
+    if app == "zoom":
+        for bit, key in ZOOM_KEYS.items():
+            if bits & bit:
+                if bit == MIC and safe(zoom_mute_button) is None:
+                    toggle_system_mic()
+                else:
+                    press_alt(kbd, key)
+        return
+    buttons = safe(teams_buttons, {})
+    for bit, names in TEAMS_TAPS.items():
+        if bits & bit:
+            button = next((buttons[n] for n in names if n in buttons), None)
+            if button is not None:
+                safe(lambda: button.get_action_iface().do_action(0))
+            elif bit == MIC:
+                toggle_system_mic()
+
+
 def main():
     dev = find_hidraw()
     fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
-    kbd = UInput({e.EV_KEY: [e.KEY_LEFTALT, e.KEY_A, *KEYS.values()]}, name="dell-collab-touchpad")
+    kbd = UInput({e.EV_KEY: [e.KEY_LEFTALT, *ZOOM_KEYS.values()]}, name="dell-collab-touchpad")
     print(f"Using {dev}", flush=True)
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # the finally block switches the icons off
 
-    sent, sent_at, next_poll = None, 0.0, 0.0
+    app, sent, sent_at, next_poll = None, None, 0.0, 0.0
     try:
         while True:
             now = time.monotonic()
             if now >= next_poll:
-                report = led_report(camera_on(), mic_on()) if meeting_active() else OFF
+                app = active_app()
+                report = led_report(*state(app)) if app else OFF
                 if report != sent or (report != OFF and now - sent_at >= REFRESH):
                     os.write(fd, report)
                     sent, sent_at = report, now
@@ -130,20 +199,9 @@ def main():
             if not select.select([fd], [], [], max(0.0, next_poll - time.monotonic()))[0]:
                 continue
             data = os.read(fd, 64)
-            if len(data) < 2 or data[0] != RID or not data[1] or sent in (None, OFF):
+            if len(data) < 2 or data[0] != RID or not data[1] or app is None or sent in (None, OFF):
                 continue
-            if data[1] & MIC:
-                try:
-                    in_zoom = zoom_mute_button() is not None
-                except Exception:
-                    in_zoom = False
-                if in_zoom:
-                    press_alt(kbd, e.KEY_A)
-                else:
-                    subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
-            for bit, key in KEYS.items():
-                if data[1] & bit:
-                    press_alt(kbd, key)
+            tap(app, data[1], kbd)
             next_poll = 0.0  # show the new state at once
     finally:
         try:

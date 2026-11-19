@@ -13,8 +13,8 @@ Windows, Dell Optimizer switches these icons on during a call. Under Linux the
 icons stay dark by default, and taps on the strip arrive as ordinary touches.
 
 Status as of 2026-11-19: working. A small user service lights the icons
-during Zoom meetings, shows the camera and microphone state, and handles taps
-(see [Zoom service](#zoom-service)). The rest of this page documents how the
+during Zoom meetings and Teams meetings in Firefox, shows the camera and
+microphone state, and handles taps (see [Meeting service](#meeting-service)). The rest of this page documents how the
 protocol was found.
 
 ## Quick start
@@ -23,14 +23,16 @@ protocol was found.
 ./install.sh     # run as your normal user; asks for sudo (packages, udev rules)
 ```
 
-Then enable the global shortcuts in Zoom and your desktop, see
-[Global shortcuts](#global-shortcuts). `./uninstall.sh` removes everything
+For Zoom, enable the global shortcuts in Zoom and your desktop, see
+[Global shortcuts](#global-shortcuts). For Teams, restart Firefox once after
+the install, see [Teams in Firefox](#teams-in-firefox). `./uninstall.sh` removes everything
 again.
 
 ## Other laptops and distributions
 
 Tested only on one Dell Pro 14 Premium (touchpad `0488:1083`) with Ubuntu
-26.04, KDE Plasma 6 on Wayland and the Zoom `.deb` package. Dell's Windows
+26.04, KDE Plasma 6 on Wayland, the Zoom `.deb` package and Teams in the
+Firefox snap. Dell's Windows
 agent is generic (it checks which features a touchpad offers), so other Dell
 models with a Collaboration Touchpad probably use the same protocol, but this
 is not confirmed. Reports from other setups are welcome, see
@@ -67,12 +69,13 @@ sudo python3 collab_linux_test.py --dev /dev/hidrawN --plain --level 3 --seconds
 2. installs the packages below,
 3. adds a udev rule for `/dev/uinput` if the logged-in user cannot write to
    it yet (Ubuntu already allows it; the virtual keyboard needs it),
-4. installs and starts the systemd user service.
+4. switches on the desktop accessibility flag (needed for Teams in Firefox),
+   then installs and starts the systemd user service.
 
 | Needed for | Ubuntu, Debian | Fedora | Arch |
 | --- | --- | --- | --- |
 | virtual keyboard | `python3-evdev` | `python3-evdev` | `python-evdev` |
-| Zoom mute state (AT-SPI) | `python3-gi`, `gir1.2-atspi-2.0` | `python3-gobject`, `at-spi2-core` | `python-gobject`, `at-spi2-core` |
+| Zoom mute state, Teams buttons (AT-SPI) | `python3-gi`, `gir1.2-atspi-2.0` | `python3-gobject`, `at-spi2-core` | `python-gobject`, `at-spi2-core` |
 | meeting detection (`pactl`) | `pulseaudio-utils` | `pulseaudio-utils` | `libpulse` |
 | system mute fallback (`wpctl`) | `wireplumber` | `wireplumber` | `wireplumber` |
 
@@ -80,7 +83,7 @@ The Fedora and Arch package names are untested. On other distributions,
 install the equivalent packages yourself and run
 `SKIP_PACKAGES=1 ./install.sh`.
 
-### 3. Desktop and Zoom
+### 3. Desktop and meeting apps
 
 | Setup | Expected result |
 | --- | --- |
@@ -89,6 +92,8 @@ install the equivalent packages yourself and run
 | GNOME on Wayland | icons and their states work; taps reach Zoom only while its window has focus (GNOME cannot pass keys to X11 apps in the background) |
 | Zoom interface not in English | mic icon and tap fall back to the system mute |
 | Zoom as Flatpak or Snap | untested; meeting, camera and mute detection may behave differently in the sandbox |
+| Teams in Firefox | works on any desktop, taps included; needs the English Teams interface |
+| Teams in another browser or the `teams-for-linux` app | not supported |
 
 ### Reporting back
 
@@ -98,7 +103,7 @@ Please open an issue in this repository with:
 - the output of the check in step 1
 - the distribution and version, desktop and session type
   (`echo $XDG_SESSION_TYPE`)
-- how Zoom is installed (`.deb`, `.rpm`, Flatpak, Snap)
+- how Zoom or Firefox is installed (`.deb`, `.rpm`, Flatpak, Snap)
 - what worked and what did not, with the log
   (`journalctl --user -u dell-collab-touchpad.service`)
 
@@ -374,12 +379,15 @@ drops it, which is why taps on lit icons do not move or click the cursor.
 each report replaces the full LED state, a bare REQUEST switches the icons
 off, so combine the two: `--plain --hb-with-leds --req-period 0.5`.
 
-## Zoom service
+## Meeting service
 
 [`collab_touchpad.py`](collab_touchpad.py) runs as the systemd user service
-`dell-collab-touchpad.service`. Once per second it checks the state below and
-rewrites the LED report when it changes (and every 10 s, in case the touchpad
-was reset by a suspend).
+`dell-collab-touchpad.service`. Once per second it checks whether a Zoom or
+Teams meeting runs, reads its state and rewrites the LED report when it
+changes (and every 10 s, in case the touchpad was reset by a suspend). If both
+run at once, Zoom wins.
+
+### Zoom
 
 | Icon | Lit | Tap |
 | --- | --- | --- |
@@ -402,6 +410,40 @@ was reset by a suspend).
   text every second (about 0.1 s per read). It depends on Zoom's English
   interface; if the button is not found, the mic icon shows the system mute
   (`wpctl`) instead, and a tap toggles the system mute.
+
+### Teams in Firefox
+
+| Icon | Lit | Tap |
+| --- | --- | --- |
+| Camera | white while the camera button reads "Turn camera off", else red | presses the camera button |
+| Share | white | presses "Share" (the screen picker still needs a click) |
+| Chat | white | presses "Chat" in the meeting controls |
+| Mic | red while the mute button reads "Unmute mic", else white | presses the mute button |
+
+- **Meeting detection:** the icons are lit while Firefox has a recording
+  stream whose name, the tab title, contains "Microsoft Teams". Teams keeps
+  this stream open while muted and closes it when you leave.
+- **State and taps:** Teams' meeting toolbar buttons are read and pressed over
+  AT-SPI, also while the Teams tab is in the background or Firefox is
+  minimized. No keyboard shortcuts are involved, so this works on any desktop.
+  A scan takes about 0.03 s with the tab in front and 0.2 s in the background.
+  It depends on Teams' English interface; without the mute button, the mic
+  icon shows the system mute and a tap toggles it.
+- **Accessibility flag:** Firefox exposes web pages over AT-SPI only while the
+  desktop accessibility flag is on (`org.a11y.Status IsEnabled`, stored in
+  `org.gnome.desktop.interface toolkit-accessibility`). `install.sh` switches
+  it on; Firefox must be restarted once afterwards. The flag stays on after
+  `uninstall.sh`, since other tools may rely on it. To switch it off:
+  `gsettings set org.gnome.desktop.interface toolkit-accessibility false`.
+- **Desktop app:** the `teams-for-linux` snap failed here: its sandbox denies
+  the microphone (`audio-record` not connected) and its D-Bus control
+  interface. The `.deb` version registers that interface and reports call and
+  mute state, but its mute and video commands had no effect, and camera and
+  screen sharing failed (the cause was not investigated further). Teams in
+  Firefox had none of these problems.
+
+### Common to both
+
 - **Access:** the udev rule
   [`70-dell-collab-touchpad.rules`](config/70-dell-collab-touchpad.rules)
   gives the logged-in user access to the touchpad's hidraw node
@@ -413,9 +455,9 @@ was reset by a suspend).
 
 ### Global shortcuts
 
-Zoom only reacts to Alt+V, Alt+S, Alt+H and Alt+A while its window has
-focus, unless the shortcuts are global. Zoom runs as an X11 app under
-XWayland, so two settings are needed:
+Only needed for Zoom. Zoom only reacts to Alt+V, Alt+S, Alt+H and Alt+A
+while its window has focus, unless the shortcuts are global. Zoom runs as an
+X11 app under XWayland, so two settings are needed:
 
 1. Zoom: Settings, Keyboard Shortcuts: tick "Enable Global Shortcut" for
    "Mute/Unmute My Audio", "Start/Stop Video", "Start/Stop Screen Sharing"
