@@ -71,6 +71,60 @@ active Zoom call, with the icons lit just before:
   Optimizer must do it with output reports.
 - No input reports in 30 s.
 
+### Protocol decoded from CTPAgent.dll
+
+Disassembled with capstone (`UpdateLedCtrl`, `SendHeartbeat`,
+`UpdateCTPState`, `HandleInputReport`). The byte layout below was then built
+with Windows' own `HidP_SetUsageValue`/`HidP_SetUsages` on the device's
+preparsed data, without sending anything to the touchpad.
+
+Output report `0x16`, 6 bytes with the report ID:
+
+| Bits (after ID) | Usage | Meaning |
+| --- | --- | --- |
+| 0-2 | `0x20` | camera LED, camera-off variant |
+| 3-5 | `0x21` | camera LED, camera-on variant |
+| 6-8 | `0x22` | share-screen LED |
+| 9-11 | `0x24` | chat LED |
+| 12-14 | `0x26` | mic LED, muted variant |
+| 15-17 | `0x27` | mic LED, unmuted variant |
+| 18 | `0x30` | REQUEST: touchpad answers with a status input report |
+| 19 | `0x31` | HEARTBEAT |
+| 20 | `0x32` | OVERRIDE: host controls the LEDs |
+| byte 4 bits 0-3 | usages 1-4 | per-button selector: 1 camera, 2 share, 3 chat, 4 mic |
+| byte 5 bits 0-3 | `0xA2` | chat breathing (Optimizer writes 8, `0xF` or 0) |
+
+- Button IDs inside the agent: 0 camera, 1 mic, 2 chat, 3 share screen.
+- Each LED field gets Optimizer's brightness setting (0 to 4). Camera and mic
+  have two LEDs; the state picks which one gets the value, the other gets 0.
+- The selector bit is set for a button when it is enabled.
+- `0x32` OVERRIDE is set together with the LED values when host control is on.
+- Status input `16 00 xx`: bit 7 TouchpadDisable, bit 6 TouchpadEnable,
+  bit 5 SwipeOff (log string: `CTP FW state: ...`). So `16 00 40` and
+  `16 00 60` on Linux were status reports.
+- The heartbeat is not on a timer. `SendHeartbeat` runs only from
+  `HandleInputReport`: when a status report arrives and override is active,
+  the host answers with a report that has only bit `0x31` set.
+
+Single-field examples, as built by `HidP_*`:
+
+```text
+REQUEST            16 00 00 04 00 00
+HEARTBEAT          16 00 00 08 00 00
+OVERRIDE           16 00 00 10 00 00
+all on, level 4,   16 20 09 12 0f 00   (0x21, 0x22, 0x24, 0x27 = 4,
+selectors+override                      selectors 1-4, override)
+```
+
+[`collab_linux_test.py`](collab_linux_test.py) replays this on Linux over
+hidraw: REQUEST, then the LED report, then a heartbeat in reply to each
+status report (plus a fallback timer). Options switch the selector, override
+and heartbeat variants on or off.
+
+```sh
+sudo python3 collab_linux_test.py
+```
+
 ### What the Dell driver tells us
 
 The native agent
