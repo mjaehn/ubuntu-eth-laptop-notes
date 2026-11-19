@@ -3,11 +3,11 @@
 The Dell Pro 14 Premium (PA14250) has a Collaboration Touchpad: a strip at the
 top of the touchpad shows Zoom/Teams icons (mute, camera, share, chat). On
 Windows, Dell Optimizer switches these icons on during a call. Under Linux the
-icons stay dark, and taps on the strip arrive as ordinary touches.
+icons stay dark by default, and taps on the strip arrive as ordinary touches.
 
-Status as of 2026-11-19: not working. The LED protocol is decoded and the
-touchpad answers it under Linux, but the icons stay dark. Open questions for
-the Windows side are listed at the end.
+Status as of 2026-11-19: the icons light up under Linux with a single plain
+LED report (see [Working: icons lit on Linux](#working-icons-lit-on-linux)).
+Button taps and a background service are still to do.
 
 ## Hardware
 
@@ -236,18 +236,39 @@ The page "Touchpad für die Zusammenarbeit" maps onto the protocol:
 | Blinken des Chat-Symbols (on) | `0xA2` chat breathing, byte 5 |
 | Symbole nur beim Doppeltippen aktivieren (off) | `SetClickMode`, the only feature-report write (double-tap durations) |
 
-### Next test on Linux
+## Working: icons lit on Linux
 
-Ideally after a full power-off, so no override is latched:
+On 2026-11-19 the icons lit up for the first time with:
 
 ```sh
-sudo python3 collab_status.py
-sudo python3 collab_linux_test.py --plain
-sudo python3 collab_linux_test.py --plain --req-period 0.5
+sudo python3 collab_linux_test.py --plain --level 3 --seconds 60
 ```
 
-Then try `--plain --level 3`, the level of the Windows slider. If the icons
-stay dark, also try `--plain --level 2` and `--plain --no-selector`.
+This sends one REQUEST and then one plain LED report, `16 d8 86 01 0f 00`
+(level 3 on usages `0x21`, `0x22`, `0x24`, `0x27`, selectors 1 to 4, no
+OVERRIDE, no heartbeat). Observations:
+
+- The icons stay lit for the whole run without any heartbeat, and go dark when
+  the script sends the all-zero report at the end.
+- Status was `16 00 60` (SwipeOff set) and the icons still lit, which confirms
+  that this touchpad ignores SwipeOff.
+- Camera and mic lit **red**, share and chat **white**. So `0x21` and `0x27`
+  drive the red LEDs; the README table above calls them the "camera-on" and
+  "mic unmuted" variants, which needs checking against the agent code.
+- Tapping the lit icons (camera, share, chat, mic, in this order) did not
+  visibly move or click the cursor.
+
+`--req-period` sends a bare REQUEST unless `--hb-with-leds` is also given. If
+each report replaces the full LED state, a bare REQUEST switches the icons
+off, so combine the two: `--plain --hb-with-leds --req-period 0.5`.
+
+### Next steps
+
+1. Capture the input reports during taps on the lit icons, to map each icon
+   to its button bit in byte 1 of report `0x16`.
+2. Check which LED of each camera/mic pair means "on" and which "off".
+3. Write a small user service: light the icons while Zoom runs, send Zoom's
+   shortcuts on taps (Alt+V camera, Alt+S share, Alt+H chat, Alt+A mic).
 
 ## Still open on the Windows side
 

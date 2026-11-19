@@ -75,7 +75,7 @@ def main():
         else bytes([RID, 0, 0, REQUEST, 0, 0])
 
     send(bytes([RID, 0, 0, REQUEST, 0, 0]), "REQUEST state")
-    send(leds, "LEDs + selector + OVERRIDE")
+    send(leds, "LEDs" + ("" if a.no_selector else " + selector") + ("" if a.no_override else " + OVERRIDE"))
     end, last_hb = time.time() + a.seconds, time.time()
     last_req = last_hb
     try:
