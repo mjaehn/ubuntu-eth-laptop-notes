@@ -7,7 +7,12 @@ RID, LEN, LISTEN_SECONDS = 0x16, 13, 30
 
 devs = [d for d in hid.enumerate() if d["usage_page"] == 0xFF80 and d["usage"] == 0x80]
 if not devs:
-    raise SystemExit("No vendor collection 0xFF80/0x80 found. Is this the same touchpad?")
+    raise SystemExit(
+        "No vendor collection 0xFF80/0x80 found.\n"
+        "On Windows, Dell Optimizer (CollaborationTouchpadPlugin.CTPAgent.dll) opens this\n"
+        "collection (HID\\VEN_0488&Col06) exclusively, so hidapi cannot list it (error 32,\n"
+        "sharing violation). Stop Dell Optimizer first, or check Device Manager for Col06."
+    )
 
 for d in devs:
     print(f"Device {d['vendor_id']:04x}:{d['product_id']:04x}  {d['product_string']}  {d['path']}")

@@ -49,3 +49,53 @@ python collab_win_dump.py   # during a Zoom desktop call, tap each icon once
 
 If the feature report differs from the Linux default above, writing that value
 under Linux may switch the icons on.
+
+### Result: the script cannot read while Dell Optimizer runs
+
+On 2026-11-19 the script printed `No vendor collection 0xFF80/0x80 found`.
+The collection is there: Device Manager lists `HID\VEN_0488&Col06` with
+hardware ID `HID\VID_0488&UP:FF80_U:0080`. But `CreateFile` on it fails with
+error 32 (sharing violation), even with zero access rights, so hidapi skips it.
+Dell Optimizer holds it open exclusively, so nothing can sniff it in parallel.
+
+### Result with Dell Optimizer stopped
+
+Dell Optimizer is not a service of its own; the `DellTechHub` service starts
+`DellOptimizer.exe`. After `Stop-Service DellTechHub` and killing
+`DellOptimizer.exe`, the lock went away a few seconds later and the script ran
+(the admin shell needs the full path to the per-user `python.exe`). During an
+active Zoom call, with the icons lit just before:
+
+- Feature `0x16`: `16 58 02 e8 03 e8 03 10 ff 13 26 00 00`, identical to the
+  Linux default. The feature report does not switch the icons on; Dell
+  Optimizer must do it with output reports.
+- No input reports in 30 s.
+
+### What the Dell driver tells us
+
+The native agent
+`C:\Program Files\Dell\DellOptimizer\Plugins\Bootstrap\CollaborationTouchpadPlugin.CTPAgent.dll`
+talks to the collection through `HidD_SetFeature`, `HidP_SetUsages`,
+`HidP_SetUsageValue` and `WriteFile`. Its log strings name these concepts:
+
+- Output usages `USAGE_HEARTBEAT`, `USAGE_REQUEST` and `USAGE_OVERRIDE`. These
+  probably are the three flag bits `0x30` to `0x32`. A heartbeat flag would
+  explain why the icons stay dark under Linux: the firmware may light them only
+  while the host keeps sending heartbeats.
+- `Activate HID`, `Enable HID`, `EnableFeature`, `SetButtonLight for BUTTON_ID`,
+  `UpdateLedCtrl`, `EnableChatBreathing`.
+- Output report handlers for `SYNC`, `GESTURE`, `enabled`, `disabled` and for
+  the mic, camera, share-screen and chat buttons.
+- Feature usages `USAGE_DBLTAP_DURATION_MAX` and `USAGE_INTENSITY`.
+
+The managed wrapper `Dell.Optimizer.Plugin.CollaborationTouchpad.dll` only
+calls into this native DLL.
+
+### Options for the next step
+
+1. Disassemble `CTPAgent.dll` (for example with Ghidra) and map the
+   `USAGE_*` names to usage numbers and the order of the init writes.
+2. Hook `HidD_SetFeature` and `WriteFile` in the Dell Optimizer process (API
+   Monitor or Frida, as administrator) and log the bytes during a call.
+3. Stop Dell Optimizer, then run `collab_win_dump.py` to compare the Windows
+   default feature report with the Linux one.
