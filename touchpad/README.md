@@ -224,6 +224,18 @@ Note that the input path only reacts to status reports with no button bits
 set. Button taps are handled separately (button IDs 0 camera, 1 mic, 2 chat,
 3 share).
 
+### Dell Optimizer settings page
+
+The page "Touchpad für die Zusammenarbeit" maps onto the protocol:
+
+| Setting | Protocol |
+| --- | --- |
+| Toggles Video, Freigeben, Chat, Mikrofon (all on) | selector bits in byte 4 (`0f`) |
+| Helligkeit der Symbole (slider at about 2/3) | LED field value, probably 3 of 1-4 |
+| Automatic brightness (on) | managed plugin reads the ambient light sensor and changes the level |
+| Blinken des Chat-Symbols (on) | `0xA2` chat breathing, byte 5 |
+| Symbole nur beim Doppeltippen aktivieren (off) | `SetClickMode`, the only feature-report write (double-tap durations) |
+
 ### Next test on Linux
 
 Ideally after a full power-off, so no override is latched:
@@ -234,8 +246,8 @@ sudo python3 collab_linux_test.py --plain
 sudo python3 collab_linux_test.py --plain --req-period 0.5
 ```
 
-If the icons stay dark, also try `--plain --level 2` and
-`--plain --no-selector`.
+Then try `--plain --level 3`, the level of the Windows slider. If the icons
+stay dark, also try `--plain --level 2` and `--plain --no-selector`.
 
 ## Still open on the Windows side
 
