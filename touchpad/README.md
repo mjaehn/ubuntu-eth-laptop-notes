@@ -5,9 +5,20 @@ top of the touchpad shows Zoom/Teams icons (mute, camera, share, chat). On
 Windows, Dell Optimizer switches these icons on during a call. Under Linux the
 icons stay dark by default, and taps on the strip arrive as ordinary touches.
 
-Status as of 2026-11-19: the icons light up under Linux with a single plain
-LED report (see [Working: icons lit on Linux](#working-icons-lit-on-linux)).
-Button taps and a background service are still to do.
+Status as of 2026-11-19: working. A small user service lights the icons
+during Zoom meetings, shows the camera and microphone state, and handles taps
+(see [Zoom service](#zoom-service)). The rest of this page documents how the
+protocol was found.
+
+## Quick start
+
+```sh
+./install.sh     # run as your normal user; asks for sudo (udev rule)
+```
+
+Then enable the global shortcuts in Zoom and KDE, see
+[Global shortcuts](#global-shortcuts). `./uninstall.sh` removes everything
+again.
 
 ## Hardware
 
@@ -281,10 +292,61 @@ drops it, which is why taps on lit icons do not move or click the cursor.
 each report replaces the full LED state, a bare REQUEST switches the icons
 off, so combine the two: `--plain --hb-with-leds --req-period 0.5`.
 
-### Next steps
+## Zoom service
 
-1. Write a small user service: light the icons while Zoom runs, send Zoom's
-   shortcuts on taps (Alt+V camera, Alt+S share, Alt+H chat, Alt+A mic).
+[`collab_touchpad.py`](collab_touchpad.py) runs as the systemd user service
+`dell-collab-touchpad.service`. Once per second it checks the state below and
+rewrites the LED report when it changes (and every 10 s, in case the touchpad
+was reset by a suspend).
+
+| Icon | Lit | Tap |
+| --- | --- | --- |
+| Camera | white while Zoom holds a `/dev/video*` open, else red | Alt+V to Zoom (start/stop video) |
+| Share | white | Alt+S to Zoom (share screen) |
+| Chat | white | Alt+H to Zoom (show/hide chat) |
+| Mic | red while Zoom shows you muted, else white | Alt+A to Zoom (mute/unmute) |
+
+- **Meeting detection:** the icons are lit while Zoom has a recording stream
+  named `ZOOM VoiceEngine` open (`pactl list source-outputs`), which it does
+  only while connected to meeting audio. The helper process `aomhost` is not a
+  usable signal: it keeps running after the first meeting until Zoom quits.
+- **Camera state:** Zoom opens the video device only while the camera is on,
+  so `/proc/<zoom pid>/fd` gives the true state for any camera.
+- **Microphone:** Zoom keeps its recording stream open and unchanged when
+  muted, so the audio system does not show Zoom's mute state. Zoom does
+  expose its window contents over AT-SPI (the accessibility interface screen
+  readers use): the toolbar button in the "Meeting" window reads "Mute" while
+  you are audible and "Unmute" while you are muted. The service reads that
+  text every second (about 0.1 s per read). It depends on Zoom's English
+  interface; if the button is not found, the mic icon shows the system mute
+  (`wpctl`) instead, and a tap toggles the system mute.
+- **Access:** the udev rule
+  [`70-dell-collab-touchpad.rules`](config/70-dell-collab-touchpad.rules)
+  gives the logged-in user access to the touchpad's hidraw node. This node
+  also carries the raw finger reports of the touchpad. Key presses go through
+  a virtual keyboard on `/dev/uinput`, which the logged-in user can already
+  use on Ubuntu.
+- **Brightness:** level 3 of 4; set `COLLAB_LEVEL` in the unit to change it.
+
+### Global shortcuts
+
+Zoom only reacts to Alt+V, Alt+S, Alt+H and Alt+A while its window has
+focus, unless the shortcuts are global. Zoom runs as an X11 app under
+XWayland, so two settings are needed:
+
+1. Zoom: Settings, Keyboard Shortcuts: tick "Enable Global Shortcut" for
+   "Mute/Unmute My Audio", "Start/Stop Video", "Start/Stop Screen Sharing"
+   and "Show/Hide In-Meeting Chat Panel".
+2. KDE: System Settings, Legacy X11 App Support: allow X11 apps to read
+   keystrokes "As above, plus any key typed while the Control, Alt, or Meta
+   keys are pressed".
+
+### Logs
+
+```sh
+systemctl --user status dell-collab-touchpad.service
+journalctl --user -u dell-collab-touchpad.service
+```
 
 ## Still open on the Windows side
 

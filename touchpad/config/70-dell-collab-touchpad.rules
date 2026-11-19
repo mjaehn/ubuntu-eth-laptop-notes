@@ -1,0 +1,3 @@
+# Give the logged-in user access to the Dell Collaboration Touchpad hidraw node
+# (VEN_0488:00 0488:1083), so the user service can light its icons.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="0018:0488:1083.*", TAG+="uaccess"
