@@ -21,17 +21,19 @@ REFRESH = 10.0                                     # resend LEDs at least this o
 KEYS = {0x02: e.KEY_V, 0x04: e.KEY_S, 0x08: e.KEY_H}  # camera, share, chat -> Alt+key; mic -> Alt+A
 MIC = 0x10
 
+# Usage page 0xFF80, usage 0x80, collection, report ID 0x16: Dell's collaboration icon interface
+SIGNATURE = bytes.fromhex("0680ff0980a1018516")
+
 
 def find_hidraw():
     for node in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
         try:
-            uevent = open(node + "/device/uevent").read().upper()
             desc = open(node + "/device/report_descriptor", "rb").read()
         except OSError:
             continue
-        if "00000488:00001083" in uevent and b"\x06\x80\xff" in desc:
+        if SIGNATURE in desc:
             return "/dev/" + os.path.basename(node)
-    sys.exit("Collaboration Touchpad (0488:1083 with usage page 0xFF80) not found.")
+    sys.exit("No Collaboration Touchpad (HID usage page 0xFF80, report 0x16) found.")
 
 
 def led_report(camera_on, mic_on, level=LEVEL):

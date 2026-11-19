@@ -13,12 +13,87 @@ protocol was found.
 ## Quick start
 
 ```sh
-./install.sh     # run as your normal user; asks for sudo (udev rule)
+./install.sh     # run as your normal user; asks for sudo (packages, udev rules)
 ```
 
-Then enable the global shortcuts in Zoom and KDE, see
+Then enable the global shortcuts in Zoom and your desktop, see
 [Global shortcuts](#global-shortcuts). `./uninstall.sh` removes everything
 again.
+
+## Other laptops and distributions
+
+Tested only on one Dell Pro 14 Premium (touchpad `0488:1083`) with Ubuntu
+26.04, KDE Plasma 6 on Wayland and the Zoom `.deb` package. Dell's Windows
+agent is generic (it checks which features a touchpad offers), so other Dell
+models with a Collaboration Touchpad probably use the same protocol, but this
+is not confirmed. Reports from other setups are welcome, see
+[Reporting back](#reporting-back).
+
+### 1. Check the touchpad
+
+This needs no root. It lists the HID device that has the icon interface
+(vendor usage page `0xFF80` with report `0x16`); run it in bash or zsh:
+
+```sh
+for d in /sys/class/hidraw/*/device; do LC_ALL=C grep -qaF $'\x06\x80\xff\x09\x80\xa1\x01\x85\x16' $d/report_descriptor 2>/dev/null && echo "$d $(grep HID_NAME $d/uevent)"; done
+```
+
+- No output: the laptop has no Collaboration Touchpad, or one with a
+  different interface. The service will not work.
+- One line, for example `/sys/class/hidraw/hidraw1/device
+  HID_NAME=VEN_0488:00 0488:1083`: the service finds the touchpad by this
+  interface, not by its ID, so other touchpad models are picked up as well.
+
+Before installing anything, test whether the icons light up for 10 seconds
+(use the `hidrawN` from the line above):
+
+```sh
+sudo python3 collab_linux_test.py --dev /dev/hidrawN --plain --level 3 --seconds 10
+```
+
+### 2. Install
+
+`install.sh` works on distributions with `apt-get` (Ubuntu, Debian), `dnf`
+(Fedora) or `pacman` (Arch). It:
+
+1. finds the touchpad and writes a udev rule for exactly that device,
+2. installs the packages below,
+3. adds a udev rule for `/dev/uinput` if the logged-in user cannot write to
+   it yet (Ubuntu already allows it; the virtual keyboard needs it),
+4. installs and starts the systemd user service.
+
+| Needed for | Ubuntu, Debian | Fedora | Arch |
+| --- | --- | --- | --- |
+| virtual keyboard | `python3-evdev` | `python3-evdev` | `python-evdev` |
+| Zoom mute state (AT-SPI) | `python3-gi`, `gir1.2-atspi-2.0` | `python3-gobject`, `at-spi2-core` | `python-gobject`, `at-spi2-core` |
+| meeting detection (`pactl`) | `pulseaudio-utils` | `pulseaudio-utils` | `libpulse` |
+| system mute fallback (`wpctl`) | `wireplumber` | `wireplumber` | `wireplumber` |
+
+The Fedora and Arch package names are untested. On other distributions,
+install the equivalent packages yourself and run
+`SKIP_PACKAGES=1 ./install.sh`.
+
+### 3. Desktop and Zoom
+
+| Setup | Expected result |
+| --- | --- |
+| KDE Plasma on Wayland | everything works with the two settings in [Global shortcuts](#global-shortcuts) |
+| Any desktop on X11 | Zoom's global shortcuts work directly |
+| GNOME on Wayland | icons and their states work; taps reach Zoom only while its window has focus (GNOME cannot pass keys to X11 apps in the background) |
+| Zoom interface not in English | mic icon and tap fall back to the system mute |
+| Zoom as Flatpak or Snap | untested; meeting, camera and mute detection may behave differently in the sandbox |
+
+### Reporting back
+
+Please open an issue in this repository with:
+
+- the laptop model
+- the output of the check in step 1
+- the distribution and version, desktop and session type
+  (`echo $XDG_SESSION_TYPE`)
+- how Zoom is installed (`.deb`, `.rpm`, Flatpak, Snap)
+- what worked and what did not, with the log
+  (`journalctl --user -u dell-collab-touchpad.service`)
 
 ## Hardware
 
@@ -322,10 +397,11 @@ was reset by a suspend).
   (`wpctl`) instead, and a tap toggles the system mute.
 - **Access:** the udev rule
   [`70-dell-collab-touchpad.rules`](config/70-dell-collab-touchpad.rules)
-  gives the logged-in user access to the touchpad's hidraw node. This node
-  also carries the raw finger reports of the touchpad. Key presses go through
-  a virtual keyboard on `/dev/uinput`, which the logged-in user can already
-  use on Ubuntu.
+  gives the logged-in user access to the touchpad's hidraw node
+  (`install.sh` fills in the ID of the detected touchpad). This node also
+  carries the raw finger reports of the touchpad. Key presses go through a
+  virtual keyboard on `/dev/uinput`, which the logged-in user can already use
+  on Ubuntu; elsewhere `install.sh` adds a rule for it.
 - **Brightness:** level 3 of 4; set `COLLAB_LEVEL` in the unit to change it.
 
 ### Global shortcuts

@@ -15,17 +15,19 @@ RID = 0x16
 REQUEST, HEARTBEAT, OVERRIDE = 0x04, 0x08, 0x10            # byte 3 flag bits (usages 0x30, 0x31, 0x32)
 SEL = {"camera": 0x01, "share": 0x02, "chat": 0x04, "mic": 0x08}  # byte 4 (usages 1..4)
 
+# Usage page 0xFF80, usage 0x80, collection, report ID 0x16: Dell's collaboration icon interface
+SIGNATURE = bytes.fromhex("0680ff0980a1018516")
+
 
 def find_hidraw():
     for node in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
         try:
-            uevent = open(node + "/device/uevent").read()
             desc = open(node + "/device/report_descriptor", "rb").read()
         except OSError:
             continue
-        if "00000488:00001083" in uevent.upper() and b"\x06\x80\xff" in desc:
+        if SIGNATURE in desc:
             return "/dev/" + os.path.basename(node)
-    sys.exit("No hidraw node for 0488:1083 with usage page 0xFF80 found.")
+    sys.exit("No Collaboration Touchpad (HID usage page 0xFF80, report 0x16) found.")
 
 
 def led_report(level, selector=True, flags=0, red=False):
