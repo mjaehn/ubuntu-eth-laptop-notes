@@ -50,7 +50,15 @@ def main():
     ap.add_argument("--hb-with-leds", action="store_true")
     ap.add_argument("--hb-period", type=float, default=0.5, help="also send a heartbeat every N s (0 = only on status reports)")
     ap.add_argument("--req-period", type=float, default=0, help="also send REQUEST every N s to keep status replies coming")
+    ap.add_argument("--no-heartbeat", action="store_true",
+                    help="never send heartbeats; Optimizer only sends them while it forces the strip off")
+    ap.add_argument("--plain", action="store_true",
+                    help="Optimizer's normal path: LEDs + selector only, no OVERRIDE, no heartbeat")
     a = ap.parse_args()
+    if a.plain:
+        a.no_override = a.no_heartbeat = True
+    if a.no_heartbeat:
+        a.hb_period = 0
 
     dev = a.dev or find_hidraw()
     fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
@@ -80,7 +88,7 @@ def main():
                     st = data[2]
                     note = f"buttons={data[1]:08b} disable={st >> 7 & 1} enable={st >> 6 & 1} swipeoff={st >> 5 & 1}"
                 print(f"{time.strftime('%H:%M:%S')}  <- {data.hex(' ')}  {note}")
-                if data and data[0] == RID and data[1] == 0:
+                if data and data[0] == RID and data[1] == 0 and not a.no_heartbeat:
                     send(hb, "HEARTBEAT (reply to status)")
                     last_hb = time.time()
             if a.hb_period and time.time() - last_hb >= a.hb_period:

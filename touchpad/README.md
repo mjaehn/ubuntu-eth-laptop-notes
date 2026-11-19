@@ -103,12 +103,13 @@ Output report `0x16`, 6 bytes with the report ID:
 - Each LED field gets Optimizer's brightness setting (0 to 4). Camera and mic
   have two LEDs; the state picks which one gets the value, the other gets 0.
 - The selector bit is set for a button when it is enabled.
-- `0x32` OVERRIDE is set together with the LED values when host control is on.
+- `0x32` OVERRIDE is set together with the LED values, but only while the
+  host has the strip temporarily disabled (see Q2 below).
 - Status input `16 00 xx`: bit 7 TouchpadDisable, bit 6 TouchpadEnable,
   bit 5 SwipeOff (log string: `CTP FW state: ...`). So `16 00 40` and
   `16 00 60` on Linux were status reports.
 - The heartbeat is not on a timer. `SendHeartbeat` runs only from
-  `HandleInputReport`: when a status report arrives and override is active,
+  `HandleInputReport`: when a status report arrives and TemporaryDisable is set,
   the host answers with a report that has only bit `0x31` set.
 
 Single-field examples, as built by `HidP_*`:
@@ -149,6 +150,8 @@ status report. Options:
 | `--hb-period N` | extra heartbeat every N s (default 0.5, 0 = only in reply to status) |
 | `--req-period N` | REQUEST every N s, so status replies and heartbeats keep coming |
 | `--no-selector`, `--no-override` | leave those bits out |
+| `--no-heartbeat` | never send heartbeats (no reply, no timer) |
+| `--plain` | Optimizer's normal path: `--no-override --no-heartbeat` |
 | `--level N`, `--seconds N` | LED value 0 to 4, run time |
 
 [`collab_status.py`](collab_status.py) sends one REQUEST and prints the
@@ -177,22 +180,70 @@ missing. Two candidates remain:
    The feature report read after Optimizer was stopped equals the Linux
    default, so the write may be transient or use another report.
 
-## Open questions for the Windows laptop
+## Answers from the Windows laptop (2026-11-19, from CTPAgent.dll)
 
-To be answered on the Windows laptop with Dell Optimizer installed (for
-example by Claude Code there, after `git pull`):
+### Q1: init writes
 
-1. In `CTPAgent.dll`, what code runs before the first `UpdateLedCtrl`? Map
-   `Activate HID`, `Enable HID` and `EnableFeature` to the exact reports and
-   bytes they send (`HidD_SetFeature`, `WriteFile`, `HidD_SetOutputReport`),
-   and their order.
-2. Where does the agent read the SwipeOff bit (status bit 5), and what does it
-   do when it is set? Does any write clear it?
-3. While Optimizer has the icons lit, what is the status byte? Either decode
+There are none. Apart from logging, the agent writes to the collection in
+exactly one place, `WriteOutputReportInternal`, which uses `WriteFile` with
+output report `0x16`. `HidD_SetFeature` is only used by `SetClickMode` (the
+double-tap durations in feature `0x16`) and by the haptic touchpad code.
+`Activate` and `Enable` only change internal state and then call `Update`,
+which builds the LED report. At startup the agent checks whether the output
+report has usage `0x32` (stored at offset `0x448`, "override supported") and
+`0x31` (offset `0x449`, "heartbeat supported"). Both are present on this
+touchpad.
+
+### Q2: SwipeOff and the OVERRIDE/HEARTBEAT path
+
+The agent keeps two flags. The log string
+`Can't update CTP state because TemporaryDisable (%d) or TabletModeDisable (%d)`
+names them:
+
+- `TabletModeDisable` = status bit 7 (TouchpadDisable).
+- `TemporaryDisable` = status bit 5 (SwipeOff), but only on touchpads
+  without OVERRIDE support. On this touchpad SwipeOff is logged and then
+  ignored. `TemporaryDisable` is set only by the host (`Activate` with
+  state 4).
+
+The LED update (`Update`) is skipped while either flag is set. The two
+special bits are used only in the `TemporaryDisable` case:
+
+- `UpdateLedCtrl` sets `0x32` OVERRIDE only when override is supported and
+  `TemporaryDisable` is set.
+- `SendHeartbeat` (`0x31`) runs only when a status report arrives and
+  `TemporaryDisable` is set.
+
+In normal use, with the icons lit during a call, Optimizer therefore sends
+**plain LED reports: LED values plus selector bits, no OVERRIDE, no
+heartbeat**. OVERRIDE plus heartbeats seems to mean "host forces the strip
+off". This would explain the dark icons in every Linux run so far: all of them
+set OVERRIDE, and most sent heartbeats.
+
+Note that the input path only reacts to status reports with no button bits
+set. Button taps are handled separately (button IDs 0 camera, 1 mic, 2 chat,
+3 share).
+
+### Next test on Linux
+
+Ideally after a full power-off, so no override is latched:
+
+```sh
+sudo python3 collab_status.py
+sudo python3 collab_linux_test.py --plain
+sudo python3 collab_linux_test.py --plain --req-period 0.5
+```
+
+If the icons stay dark, also try `--plain --level 2` and
+`--plain --no-selector`.
+
+## Still open on the Windows side
+
+1. While Optimizer has the icons lit, what is the status byte? Either decode
    it from the agent's log (`CTP FW state: ...`, if logging can be enabled) or
    hook `ReadFile`/`WriteFile` in `DellOptimizer.exe` (API Monitor or Frida, as
    administrator) and log all report `0x16` traffic during a Zoom call.
-4. After stopping `DellTechHub` and `DellOptimizer.exe`: do the icons go dark
+2. After stopping `DellTechHub` and `DellOptimizer.exe`: do the icons go dark
    at once, after a delay, or not at all? Does swiping across the strip change
    them?
 
