@@ -1,5 +1,12 @@
 # Collaboration Touchpad icons on the Dell Pro 14 Premium under Ubuntu 26.04
 
+| Camera on, microphone on | Camera off, microphone muted |
+| --- | --- |
+| ![Touchpad with all four icons lit white](images/touchpad-icons-on.jpg) | ![Touchpad with camera and mic icons red, share and chat white](images/touchpad-icons-muted.jpg) |
+
+*The lit icon strip under Linux during a Zoom meeting: camera, share screen,
+chat and microphone.*
+
 The Dell Pro 14 Premium (PA14250) has a Collaboration Touchpad: a strip at the
 top of the touchpad shows Zoom/Teams icons (mute, camera, share, chat). On
 Windows, Dell Optimizer switches these icons on during a call. Under Linux the
