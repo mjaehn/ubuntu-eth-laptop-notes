@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--no-override", action="store_true")
     ap.add_argument("--hb-with-leds", action="store_true")
     ap.add_argument("--hb-period", type=float, default=0.5, help="also send a heartbeat every N s (0 = only on status reports)")
+    ap.add_argument("--req-period", type=float, default=0, help="also send REQUEST every N s to keep status replies coming")
     a = ap.parse_args()
 
     dev = a.dev or find_hidraw()
@@ -62,10 +63,13 @@ def main():
     leds = led_report(a.level, not a.no_selector, 0 if a.no_override else OVERRIDE)
     hb = led_report(a.level, not a.no_selector, HEARTBEAT | (0 if a.no_override else OVERRIDE)) if a.hb_with_leds \
         else bytes([RID, 0, 0, HEARTBEAT, 0, 0])
+    req = led_report(a.level, not a.no_selector, REQUEST | (0 if a.no_override else OVERRIDE)) if a.hb_with_leds \
+        else bytes([RID, 0, 0, REQUEST, 0, 0])
 
     send(bytes([RID, 0, 0, REQUEST, 0, 0]), "REQUEST state")
     send(leds, "LEDs + selector + OVERRIDE")
     end, last_hb = time.time() + a.seconds, time.time()
+    last_req = last_hb
     try:
         while time.time() < end:
             r, _, _ = select.select([fd], [], [], 0.05)
@@ -82,6 +86,9 @@ def main():
             if a.hb_period and time.time() - last_hb >= a.hb_period:
                 send(hb, "HEARTBEAT (timer)")
                 last_hb = time.time()
+            if a.req_period and time.time() - last_req >= a.req_period:
+                send(req, "REQUEST (timer)")
+                last_req = time.time()
     finally:
         os.write(fd, bytes([RID, 0, 0, 0, 0, 0]))  # icons off, override released
         os.close(fd)

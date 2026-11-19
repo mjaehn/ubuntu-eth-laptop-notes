@@ -5,7 +5,9 @@ top of the touchpad shows Zoom/Teams icons (mute, camera, share, chat). On
 Windows, Dell Optimizer switches these icons on during a call. Under Linux the
 icons stay dark, and taps on the strip arrive as ordinary touches.
 
-Status as of 2026-11-19: not working, under investigation.
+Status as of 2026-11-19: not working. The LED protocol is decoded and the
+touchpad answers it under Linux, but the icons stay dark. Open questions for
+the Windows side are listed at the end.
 
 ## Hardware
 
@@ -35,8 +37,11 @@ Decoded from the HID report descriptor:
   `16 00 40` or `16 00 60`; the other two flags get no answer.
 - No combination of icon states and flags lit the icons, also when the
   report was resent every 250 ms.
+- The very first blind probe got `16 00 40` (SwipeOff clear). Every run since
+  then got `16 00 60` (SwipeOff set). The later steps of that first probe
+  (selector bits, `0xA2` nibble and all three flags at once) probably set it.
 
-## Next step: read the state on Windows
+## Windows: reading the state
 
 [`collab_win_dump.py`](collab_win_dump.py) reads report `0x16` on a Windows
 laptop with the same touchpad while Dell Optimizer has the icons lit. It only
@@ -116,26 +121,13 @@ all on, level 4,   16 20 09 12 0f 00   (0x21, 0x22, 0x24, 0x27 = 4,
 selectors+override                      selectors 1-4, override)
 ```
 
-[`collab_linux_test.py`](collab_linux_test.py) replays this on Linux over
-hidraw: REQUEST, then the LED report, then a heartbeat in reply to each
-status report (plus a fallback timer). Options switch the selector, override
-and heartbeat variants on or off.
-
-```sh
-sudo python3 collab_linux_test.py
-```
-
-### What the Dell driver tells us
+### Other strings in CTPAgent.dll
 
 The native agent
 `C:\Program Files\Dell\DellOptimizer\Plugins\Bootstrap\CollaborationTouchpadPlugin.CTPAgent.dll`
 talks to the collection through `HidD_SetFeature`, `HidP_SetUsages`,
-`HidP_SetUsageValue` and `WriteFile`. Its log strings name these concepts:
+`HidP_SetUsageValue` and `WriteFile`. Log strings not yet mapped to code:
 
-- Output usages `USAGE_HEARTBEAT`, `USAGE_REQUEST` and `USAGE_OVERRIDE`. These
-  probably are the three flag bits `0x30` to `0x32`. A heartbeat flag would
-  explain why the icons stay dark under Linux: the firmware may light them only
-  while the host keeps sending heartbeats.
 - `Activate HID`, `Enable HID`, `EnableFeature`, `SetButtonLight for BUTTON_ID`,
   `UpdateLedCtrl`, `EnableChatBreathing`.
 - Output report handlers for `SYNC`, `GESTURE`, `enabled`, `disabled` and for
@@ -145,11 +137,64 @@ talks to the collection through `HidD_SetFeature`, `HidP_SetUsages`,
 The managed wrapper `Dell.Optimizer.Plugin.CollaborationTouchpad.dll` only
 calls into this native DLL.
 
-### Options for the next step
+## Linux: replaying the protocol
 
-1. Disassemble `CTPAgent.dll` (for example with Ghidra) and map the
-   `USAGE_*` names to usage numbers and the order of the init writes.
-2. Hook `HidD_SetFeature` and `WriteFile` in the Dell Optimizer process (API
-   Monitor or Frida, as administrator) and log the bytes during a call.
-3. Stop Dell Optimizer, then run `collab_win_dump.py` to compare the Windows
-   default feature report with the Linux one.
+[`collab_linux_test.py`](collab_linux_test.py) replays the decoded protocol
+over hidraw: REQUEST, then the LED report, then a heartbeat in reply to each
+status report. Options:
+
+| Option | Effect |
+| --- | --- |
+| `--hb-with-leds` | heartbeats (and timed REQUESTs) also carry LED, selector and OVERRIDE bits |
+| `--hb-period N` | extra heartbeat every N s (default 0.5, 0 = only in reply to status) |
+| `--req-period N` | REQUEST every N s, so status replies and heartbeats keep coming |
+| `--no-selector`, `--no-override` | leave those bits out |
+| `--level N`, `--seconds N` | LED value 0 to 4, run time |
+
+[`collab_status.py`](collab_status.py) sends one REQUEST and prints the
+status reply, without touching the LEDs.
+
+### Results on 2026-11-19
+
+| Command | Result |
+| --- | --- |
+| `collab_linux_test.py` | one status reply, then silence; icons dark |
+| `--hb-with-leds --hb-period 0` | one status reply, one heartbeat, then silence; icons dark |
+| `--hb-with-leds --hb-period 0 --req-period 0.5` | stable loop for 30 s (REQUEST, status, heartbeat); icons dark |
+
+Every status reply was `16 00 60`: TouchpadEnable and SwipeOff set. The
+touchpad accepts and answers the protocol, so the keepalive is not what is
+missing. Two candidates remain:
+
+1. **SwipeOff.** If it means "collaboration strip switched off", the firmware
+   may ignore LED requests while it is set. It may have been set by the first
+   blind probe (see Findings). Test: power off fully, boot, run
+   `sudo python3 collab_status.py` before anything else. If it shows
+   `swipeoff=0`, run the replay with `--hb-with-leds --hb-period 0
+   --req-period 0.5` at once.
+2. **Init writes.** `Activate HID`, `Enable HID` and `EnableFeature` suggest a
+   setup sequence (probably via `HidD_SetFeature`) before the first LED report.
+   The feature report read after Optimizer was stopped equals the Linux
+   default, so the write may be transient or use another report.
+
+## Open questions for the Windows laptop
+
+To be answered on the Windows laptop with Dell Optimizer installed (for
+example by Claude Code there, after `git pull`):
+
+1. In `CTPAgent.dll`, what code runs before the first `UpdateLedCtrl`? Map
+   `Activate HID`, `Enable HID` and `EnableFeature` to the exact reports and
+   bytes they send (`HidD_SetFeature`, `WriteFile`, `HidD_SetOutputReport`),
+   and their order.
+2. Where does the agent read the SwipeOff bit (status bit 5), and what does it
+   do when it is set? Does any write clear it?
+3. While Optimizer has the icons lit, what is the status byte? Either decode
+   it from the agent's log (`CTP FW state: ...`, if logging can be enabled) or
+   hook `ReadFile`/`WriteFile` in `DellOptimizer.exe` (API Monitor or Frida, as
+   administrator) and log all report `0x16` traffic during a Zoom call.
+4. After stopping `DellTechHub` and `DellOptimizer.exe`: do the icons go dark
+   at once, after a delay, or not at all? Does swiping across the strip change
+   them?
+
+Feed the answers back into this file; the Linux side can then replay the
+exact sequence with `collab_linux_test.py`.
