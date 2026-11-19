@@ -1,5 +1,5 @@
 [Unit]
-Description=Dell Collaboration Touchpad icons for Zoom and Teams meetings
+Description=Dell Collaboration Touchpad icons for Zoom, Teams and Webex meetings
 After=pipewire.service wireplumber.service
 
 [Service]

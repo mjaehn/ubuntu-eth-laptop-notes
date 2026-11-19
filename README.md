@@ -19,7 +19,7 @@ Each topic has its own page with the symptoms, the cause and the fix.
 | --- | --- |
 | [Printing](printing.md) | ETH SMB printers via `ethz-cups-config-app`: jobs held for authentication, Kerberos setup |
 | [Thunderbird mail](thunderbird-mail.md) | ETH Microsoft 365 mail: SMTP refuses the login when the mail alias is used |
-| [Touchpad](touchpad/README.md) | Collaboration Touchpad icons stay dark; includes a service that lights them during Zoom and Teams meetings |
+| [Touchpad](touchpad/README.md) | Collaboration Touchpad icons stay dark; includes a service that lights them during Zoom, Teams and Webex meetings |
 | [VPN](vpn.md) | ETH VPN (Cisco AnyConnect protocol) in KDE with openconnect |
 | [Webcam](webcam/README.md) | Integrated IPU7 webcam shows black or crashes PipeWire; includes install scripts |
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the Dell Collaboration Touchpad service for Zoom and Teams meetings.
+# Install the Dell Collaboration Touchpad service for Zoom, Teams and Webex meetings.
 # Tested on a Dell Pro 14 Premium with Ubuntu 26.04; see README.md for other
 # laptops and distributions.
 #
@@ -70,7 +70,7 @@ echo "== 4/4 Service (per user)"
 # it applies to apps started afterwards and persists across logins.
 gsettings set org.gnome.desktop.interface toolkit-accessibility true 2>/dev/null || true
 busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true 2>/dev/null || true
-echo "  enabled the desktop accessibility flag (restart Firefox once for Teams)"
+echo "  enabled the desktop accessibility flag (restart Firefox and Webex once)"
 install -D -m 644 "$HERE/collab_touchpad.py" "$LIB/collab_touchpad.py"
 echo "  installed $LIB/collab_touchpad.py"
 install -D -m 644 "$HERE/config/dell-collab-touchpad.service" "$UNIT_DIR/dell-collab-touchpad.service"
@@ -82,6 +82,6 @@ sleep 2
 systemctl --user --no-pager status dell-collab-touchpad.service | head -5
 
 echo
-echo "Done. The icons light up during Zoom meetings and Teams meetings in Firefox."
+echo "Done. The icons light up during Zoom, Teams (in Firefox) and Webex meetings."
 echo "For taps in Zoom, enable the global shortcuts in Zoom and your desktop"
 echo "(see README.md)."

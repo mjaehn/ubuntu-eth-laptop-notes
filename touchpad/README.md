@@ -13,8 +13,9 @@ Windows, Dell Optimizer switches these icons on during a call. Under Linux the
 icons stay dark by default, and taps on the strip arrive as ordinary touches.
 
 Status as of 2026-11-19: working. A small user service lights the icons
-during Zoom meetings and Teams meetings in Firefox, shows the camera and
-microphone state, and handles taps (see [Meeting service](#meeting-service)). The rest of this page documents how the
+during Zoom meetings, Teams meetings in Firefox and Webex meetings, shows the
+camera and microphone state, and handles taps (see
+[Meeting service](#meeting-service)). The rest of this page documents how the
 protocol was found.
 
 ## Quick start
@@ -24,15 +25,15 @@ protocol was found.
 ```
 
 For Zoom, enable the global shortcuts in Zoom and your desktop, see
-[Global shortcuts](#global-shortcuts). For Teams, restart Firefox once after
-the install, see [Teams in Firefox](#teams-in-firefox). `./uninstall.sh` removes everything
-again.
+[Global shortcuts](#global-shortcuts). For Teams and Webex, restart Firefox
+and Webex once after the install, see [Teams in Firefox](#teams-in-firefox).
+`./uninstall.sh` removes everything again.
 
 ## Other laptops and distributions
 
 Tested only on one Dell Pro 14 Premium (touchpad `0488:1083`) with Ubuntu
-26.04, KDE Plasma 6 on Wayland, the Zoom `.deb` package and Teams in the
-Firefox snap. Dell's Windows
+26.04, KDE Plasma 6 on Wayland, the Zoom `.deb` package, Teams in the
+Firefox snap and the Webex `.deb` package. Dell's Windows
 agent is generic (it checks which features a touchpad offers), so other Dell
 models with a Collaboration Touchpad probably use the same protocol, but this
 is not confirmed. Reports from other setups are welcome, see
@@ -75,7 +76,7 @@ sudo python3 collab_linux_test.py --dev /dev/hidrawN --plain --level 3 --seconds
 | Needed for | Ubuntu, Debian | Fedora | Arch |
 | --- | --- | --- | --- |
 | virtual keyboard | `python3-evdev` | `python3-evdev` | `python-evdev` |
-| Zoom mute state, Teams buttons (AT-SPI) | `python3-gi`, `gir1.2-atspi-2.0` | `python3-gobject`, `at-spi2-core` | `python-gobject`, `at-spi2-core` |
+| Zoom mute state, Teams and Webex buttons (AT-SPI) | `python3-gi`, `gir1.2-atspi-2.0` | `python3-gobject`, `at-spi2-core` | `python-gobject`, `at-spi2-core` |
 | meeting detection (`pactl`) | `pulseaudio-utils` | `pulseaudio-utils` | `libpulse` |
 | system mute fallback (`wpctl`) | `wireplumber` | `wireplumber` | `wireplumber` |
 
@@ -94,6 +95,7 @@ install the equivalent packages yourself and run
 | Zoom as Flatpak or Snap | untested; meeting, camera and mute detection may behave differently in the sandbox |
 | Teams in Firefox | works on any desktop, taps included; needs the English Teams interface |
 | Teams in another browser or the `teams-for-linux` app | not supported |
+| Webex `.deb` | works on any desktop, taps included; needs the English Webex interface |
 
 ### Reporting back
 
@@ -103,7 +105,7 @@ Please open an issue in this repository with:
 - the output of the check in step 1
 - the distribution and version, desktop and session type
   (`echo $XDG_SESSION_TYPE`)
-- how Zoom or Firefox is installed (`.deb`, `.rpm`, Flatpak, Snap)
+- how Zoom, Firefox or Webex is installed (`.deb`, `.rpm`, Flatpak, Snap)
 - what worked and what did not, with the log
   (`journalctl --user -u dell-collab-touchpad.service`)
 
@@ -382,10 +384,10 @@ off, so combine the two: `--plain --hb-with-leds --req-period 0.5`.
 ## Meeting service
 
 [`collab_touchpad.py`](collab_touchpad.py) runs as the systemd user service
-`dell-collab-touchpad.service`. Once per second it checks whether a Zoom or
-Teams meeting runs, reads its state and rewrites the LED report when it
-changes (and every 10 s, in case the touchpad was reset by a suspend). If both
-run at once, Zoom wins.
+`dell-collab-touchpad.service`. Once per second it checks whether a Zoom,
+Teams or Webex meeting runs, reads its state and rewrites the LED report when
+it changes (and every 10 s, in case the touchpad was reset by a suspend). If
+several run at once, the first in this order wins.
 
 ### Zoom
 
@@ -442,7 +444,28 @@ run at once, Zoom wins.
   screen sharing failed (the cause was not investigated further). Teams in
   Firefox had none of these problems.
 
-### Common to both
+### Webex
+
+| Icon | Lit | Tap |
+| --- | --- | --- |
+| Camera | white while the video button reads "Stop video", else red | presses the video button |
+| Share | white | presses "Share" (the share dialog still needs a click) |
+| Chat | white | presses "Open chat panel" or "Hide chat panel" |
+| Mic | red while the mute button reads "Unmute", else white | presses the mute button |
+
+- **Meeting detection:** the icons are lit while Webex has a recording stream
+  whose application name starts with `WebexAudioCapture_`. Webex keeps it
+  open while muted and closes it when the meeting ends.
+- **State and taps:** the buttons of the meeting window are read and pressed
+  over AT-SPI, as for Teams, also while the window is in the background or
+  minimized. The main window ("Webex") is skipped; a scan takes about 0.15 to
+  0.35 s. Webex releases the camera when video is stopped, so
+  `/proc/<pid>/fd` would work too, but the button text is enough. Webex
+  started before the accessibility flag was switched on must be restarted
+  once. Without the mute button (other interface language), the mic icon
+  shows the system mute and a tap toggles it.
+
+### Common to all
 
 - **Access:** the udev rule
   [`70-dell-collab-touchpad.rules`](config/70-dell-collab-touchpad.rules)

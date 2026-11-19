@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Drive the Dell Collaboration Touchpad icons for Zoom and Teams meetings on Linux.
+"""Drive the Dell Collaboration Touchpad icons for Zoom, Teams and Webex meetings on Linux.
 
 While a meeting runs, the four icons are lit: camera and mic white when on, red
 when off/muted. Zoom: taps send Zoom's global shortcuts (Alt+V, Alt+S, Alt+H,
 Alt+A), and the mute state is read from its mute button over AT-SPI. Teams in
-Firefox: state and taps go through the meeting toolbar buttons over AT-SPI.
+Firefox and Webex: state and taps go through the meeting buttons over AT-SPI.
 Without a readable mute button, the mic icon and tap use the system mute.
 """
 import glob, os, select, signal, subprocess, sys, time
@@ -21,9 +21,13 @@ POLL = 1.0                                         # state check interval in s
 REFRESH = 10.0                                     # resend LEDs at least this often (touchpad may reset on resume)
 CAMERA, SHARE, CHAT, MIC = 0x02, 0x04, 0x08, 0x10  # button bits in the input report
 ZOOM_KEYS = {CAMERA: e.KEY_V, SHARE: e.KEY_S, CHAT: e.KEY_H, MIC: e.KEY_A}  # Alt+key
-TEAMS_TAPS = {CAMERA: ("Turn camera off", "Turn camera on"), SHARE: ("Share",),
-              CHAT: ("Chat",), MIC: ("Mute mic", "Unmute mic")}
-TEAMS_BUTTONS = {name for names in TEAMS_TAPS.values() for name in names}
+# Meeting button labels per icon; for camera and mic, the first label means "on"
+LABELS = {
+    "teams": {CAMERA: ("Turn camera off", "Turn camera on"), SHARE: ("Share",),
+              CHAT: ("Chat",), MIC: ("Mute mic", "Unmute mic")},
+    "webex": {CAMERA: ("Stop video", "Start video"), SHARE: ("Share",),
+              CHAT: ("Open chat panel", "Hide chat panel, selected"), MIC: ("Mute", "Unmute")},
+}
 
 # Usage page 0xFF80, usage 0x80, collection, report ID 0x16: Dell's collaboration icon interface
 SIGNATURE = bytes.fromhex("0680ff0980a1018516")
@@ -51,7 +55,7 @@ OFF = bytes([RID, 0, 0, 0, 0, 0])
 
 
 def active_app():
-    """Return "zoom" or "teams" while that app records from the microphone, else None."""
+    """Return "zoom", "teams" or "webex" while that app records from the microphone, else None."""
     out = subprocess.run(["pactl", "list", "source-outputs"], capture_output=True, text=True).stdout
     streams = out.split("Source Output #")[1:]
     # Zoom opens this stream only while connected to meeting audio
@@ -60,6 +64,8 @@ def active_app():
     # Firefox names the stream after the tab title, which ends in "Microsoft Teams"
     if any('application.name = "Firefox"' in s and "Microsoft Teams" in s for s in streams):
         return "teams"
+    if any('application.name = "WebexAudioCapture_' in s for s in streams):
+        return "webex"
     return None
 
 
@@ -106,8 +112,8 @@ def zoom_mute_button():
     return None
 
 
-def teams_buttons():
-    """Return Teams' meeting toolbar buttons in Firefox, keyed by their accessible name."""
+def teams_buttons(names):
+    """Return Teams' meeting toolbar buttons in Firefox with these names, keyed by name."""
     docs, stack = [], [f for app in atspi_apps("Firefox") for f in children(app)]
     while stack:  # each tab, also in the background, is one "document web"
         o = stack.pop()
@@ -120,10 +126,28 @@ def teams_buttons():
     while docs:
         o = docs.pop()
         # Plain buttons only: the "Chat" toggle button in the app sidebar opens the Chat app
-        if o.get_name() in TEAMS_BUTTONS and o.get_role_name() == "button":
+        if o.get_name() in names and o.get_role_name() == "button":
             found[o.get_name()] = o
         docs.extend(children(o))
     return found
+
+
+def webex_buttons(names):
+    """Return Webex's meeting window buttons with these names, keyed by name."""
+    found, stack = {}, [f for app in atspi_apps("Webex") for f in children(app) if f.get_name() != "Webex"]
+    while stack:  # skips the main window "Webex"; the meeting window is named after the meeting
+        o = stack.pop()
+        if o.get_name() in names and o.get_role_name() in ("button", "push button"):
+            found[o.get_name()] = o
+        stack.extend(children(o))
+    return found
+
+
+FINDERS = {"teams": teams_buttons, "webex": webex_buttons}
+
+
+def buttons(app):
+    return safe(lambda: FINDERS[app]({n for names in LABELS[app].values() for n in names}), {})
 
 
 def safe(f, default=None):
@@ -147,9 +171,9 @@ def state(app):
     if app == "zoom":
         button = safe(zoom_mute_button)
         return zoom_camera_on(), system_mic_on() if button is None else button == "Mute"
-    buttons = safe(teams_buttons, {})
-    mic = "Mute mic" in buttons if {"Mute mic", "Unmute mic"} & buttons.keys() else system_mic_on()
-    return "Turn camera off" in buttons, mic
+    found, labels = buttons(app), LABELS[app]
+    mic = labels[MIC][0] in found if set(labels[MIC]) & found.keys() else system_mic_on()
+    return labels[CAMERA][0] in found, mic
 
 
 def press_alt(kbd, key):
@@ -167,10 +191,10 @@ def tap(app, bits, kbd):
                 else:
                     press_alt(kbd, key)
         return
-    buttons = safe(teams_buttons, {})
-    for bit, names in TEAMS_TAPS.items():
+    found = buttons(app)
+    for bit, names in LABELS[app].items():
         if bits & bit:
-            button = next((buttons[n] for n in names if n in buttons), None)
+            button = next((found[n] for n in names if n in found), None)
             if button is not None:
                 safe(lambda: button.get_action_iface().do_action(0))
             elif bit == MIC:
