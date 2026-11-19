@@ -4,7 +4,7 @@
 Replays the protocol decoded from Dell Optimizer's CollaborationTouchpadPlugin.CTPAgent.dll
 (see README.md). Stdlib only. Run as root (or with access to the hidraw node):
 
-    sudo python3 collab_linux_test.py                 # all four icons on, brightness 4
+    sudo python3 collab_linux_test.py --plain          # all four icons white, brightness 4
     sudo python3 collab_linux_test.py --level 2 --seconds 60
     sudo python3 collab_linux_test.py --no-selector   # leave byte 4 at 0
     sudo python3 collab_linux_test.py --hb-with-leds  # heartbeat reports also carry the LED bits
@@ -28,12 +28,12 @@ def find_hidraw():
     sys.exit("No hidraw node for 0488:1083 with usage page 0xFF80 found.")
 
 
-def led_report(level, selector=True, flags=0):
+def led_report(level, selector=True, flags=0, red=False):
     v = 0
-    v |= level << 3    # usage 0x21: camera on      (0x20, bits 0-2: camera off)
-    v |= level << 6    # usage 0x22: share screen
-    v |= level << 9    # usage 0x24: chat
-    v |= level << 15   # usage 0x27: mic unmuted    (0x26, bits 12-14: mic muted)
+    v |= level << (3 if red else 0)    # camera: 0x20 white (on), 0x21 red (off)
+    v |= level << 6                    # usage 0x22: share screen
+    v |= level << 9                    # usage 0x24: chat
+    v |= level << (15 if red else 12)  # mic: 0x26 white (unmuted), 0x27 red (muted)
     v |= flags << 16   # 0x30/0x31/0x32 live at bits 18-20, i.e. byte 3 bits 2-4
     b = v.to_bytes(3, "little")
     sel = sum(SEL.values()) if selector else 0
@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--dev")
     ap.add_argument("--level", type=int, default=4, help="LED value 0..4 (Optimizer uses its brightness setting)")
     ap.add_argument("--seconds", type=float, default=30)
+    ap.add_argument("--red", action="store_true", help="camera and mic red (off/muted) instead of white")
     ap.add_argument("--no-selector", action="store_true")
     ap.add_argument("--no-override", action="store_true")
     ap.add_argument("--hb-with-leds", action="store_true")
@@ -68,10 +69,10 @@ def main():
         os.write(fd, rep)
         print(f"{time.strftime('%H:%M:%S')}  -> {rep.hex(' ')}  {why}")
 
-    leds = led_report(a.level, not a.no_selector, 0 if a.no_override else OVERRIDE)
-    hb = led_report(a.level, not a.no_selector, HEARTBEAT | (0 if a.no_override else OVERRIDE)) if a.hb_with_leds \
+    leds = led_report(a.level, not a.no_selector, 0 if a.no_override else OVERRIDE, a.red)
+    hb = led_report(a.level, not a.no_selector, HEARTBEAT | (0 if a.no_override else OVERRIDE), a.red) if a.hb_with_leds \
         else bytes([RID, 0, 0, HEARTBEAT, 0, 0])
-    req = led_report(a.level, not a.no_selector, REQUEST | (0 if a.no_override else OVERRIDE)) if a.hb_with_leds \
+    req = led_report(a.level, not a.no_selector, REQUEST | (0 if a.no_override else OVERRIDE), a.red) if a.hb_with_leds \
         else bytes([RID, 0, 0, REQUEST, 0, 0])
 
     send(bytes([RID, 0, 0, REQUEST, 0, 0]), "REQUEST state")

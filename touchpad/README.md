@@ -87,12 +87,12 @@ Output report `0x16`, 6 bytes with the report ID:
 
 | Bits (after ID) | Usage | Meaning |
 | --- | --- | --- |
-| 0-2 | `0x20` | camera LED, camera-off variant |
-| 3-5 | `0x21` | camera LED, camera-on variant |
+| 0-2 | `0x20` | camera LED, white (camera on) |
+| 3-5 | `0x21` | camera LED, red (camera off) |
 | 6-8 | `0x22` | share-screen LED |
 | 9-11 | `0x24` | chat LED |
-| 12-14 | `0x26` | mic LED, muted variant |
-| 15-17 | `0x27` | mic LED, unmuted variant |
+| 12-14 | `0x26` | mic LED, white (unmuted) |
+| 15-17 | `0x27` | mic LED, red (muted) |
 | 18 | `0x30` | REQUEST: touchpad answers with a status input report |
 | 19 | `0x31` | HEARTBEAT |
 | 20 | `0x32` | OVERRIDE: host controls the LEDs |
@@ -118,7 +118,7 @@ Single-field examples, as built by `HidP_*`:
 REQUEST            16 00 00 04 00 00
 HEARTBEAT          16 00 00 08 00 00
 OVERRIDE           16 00 00 10 00 00
-all on, level 4,   16 20 09 12 0f 00   (0x21, 0x22, 0x24, 0x27 = 4,
+all on, level 4,   16 20 09 12 0f 00   (0x21, 0x22, 0x24, 0x27 = 4, camera+mic red,
 selectors+override                      selectors 1-4, override)
 ```
 
@@ -252,11 +252,30 @@ OVERRIDE, no heartbeat). Observations:
   the script sends the all-zero report at the end.
 - Status was `16 00 60` (SwipeOff set) and the icons still lit, which confirms
   that this touchpad ignores SwipeOff.
-- Camera and mic lit **red**, share and chat **white**. So `0x21` and `0x27`
-  drive the red LEDs; the README table above calls them the "camera-on" and
-  "mic unmuted" variants, which needs checking against the agent code.
+- Camera and mic lit **red**, share and chat **white**. On Windows, red is
+  what the icons show with camera and mic off: `0x21` and `0x27` are the
+  red "off/muted" LEDs. Writing `16 c3 36 00 0f 00` (level 3 on `0x20`,
+  `0x22`, `0x24`, `0x26`) lit all four icons white, so `0x20` and `0x26` are
+  the white "on" LEDs. The script lights white by default; `--red` selects
+  the red pair.
 - Tapping the lit icons (camera, share, chat, mic, in this order) did not
   visibly move or click the cursor.
+
+### Button taps
+
+While the icons are lit, each tap sends one input report `16 xx 40`:
+
+| Icon | Report | Button bit (usage) | Touch X (of 2952) |
+| --- | --- | --- | --- |
+| Camera | `16 02 40` | bit 1 (`0x41`) | about 596 |
+| Share | `16 04 40` | bit 2 (`0x42`) | about 1212 |
+| Chat | `16 08 40` | bit 3 (`0x43`) | about 1831 |
+| Mic | `16 10 40` | bit 4 (`0x44`) | about 2441 |
+
+The finger reports of the tap still arrive, but the touchpad ends the touch
+with `01 02 ...` (tip set, confidence cleared, coordinates 0) instead of the
+normal lift `01 01 ...`. Linux treats a touch without confidence as a palm and
+drops it, which is why taps on lit icons do not move or click the cursor.
 
 `--req-period` sends a bare REQUEST unless `--hb-with-leds` is also given. If
 each report replaces the full LED state, a bare REQUEST switches the icons
@@ -264,10 +283,7 @@ off, so combine the two: `--plain --hb-with-leds --req-period 0.5`.
 
 ### Next steps
 
-1. Capture the input reports during taps on the lit icons, to map each icon
-   to its button bit in byte 1 of report `0x16`.
-2. Check which LED of each camera/mic pair means "on" and which "off".
-3. Write a small user service: light the icons while Zoom runs, send Zoom's
+1. Write a small user service: light the icons while Zoom runs, send Zoom's
    shortcuts on taps (Alt+V camera, Alt+S share, Alt+H chat, Alt+A mic).
 
 ## Still open on the Windows side
